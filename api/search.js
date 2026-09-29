@@ -1,312 +1,527 @@
-const norm = s =>
-  (s || '').toLowerCase().replace(/[^a-z0-9+#. ]/g, ' ');
-
-const words = s =>
-  [...new Set(norm(s).split(/\s+/).filter(x => x.length > 2))];
-
 const skills = [
-  'javascript',
-  'typescript',
-  'python',
-  'java',
-  'react',
-  'node',
-  'node.js',
-  'sql',
-  'aws',
-  'azure',
-  'gcp',
-  'docker',
-  'kubernetes',
-  'machine learning',
-  'data analysis',
-  'excel',
-  'power bi',
-  'tableau',
-  'django',
-  'flask',
-  'html',
-  'css',
-  'git'
+  "javascript",
+  "typescript",
+  "python",
+  "java",
+  "react",
+  "node",
+  "node.js",
+  "sql",
+  "aws",
+  "azure",
+  "gcp",
+  "docker",
+  "kubernetes",
+  "machine learning",
+  "data analysis",
+  "excel",
+  "power bi",
+  "tableau",
+  "django",
+  "flask",
+  "html",
+  "css",
+  "git"
 ];
 
-function profile(resume, p = {}) {
-  return {
-    skills: skills.filter(x =>
-      norm(resume).includes(norm(x))
-    ),
-    terms: words(resume),
-    titles: p.titles || '',
-    location: p.location || '',
-    remote: !!p.remote
-  };
+function normalize(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9+#. ]/g, " ");
 }
 
-function salary(s = '') {
-  return (
-    s.match(
-      /(?:\$|USD\s?)\s?\d{2,3}(?:,\d{3})?(?:\s?(?:-|–|to)\s?(?:\$|USD\s?)?\d{2,3}(?:,\d{3})?)?(?:\s?(?:\/|per )?(?:year|yr|hour))?/i
-    ) || []
-  )[0] || 'Not listed';
+function getWords(text) {
+  return [
+    ...new Set(
+      normalize(text)
+        .split(/\s+/)
+        .filter(
+          word => word.length > 2
+        )
+    )
+  ];
 }
 
-async function feed(url) {
-  const response = await fetch(url, {
-    headers: {
-      'user-agent': 'JobSeekerAgent/0.1'
-    }
-  });
+function extractSkills(resume) {
+
+  const text =
+    normalize(resume);
+
+  return skills.filter(
+    skill =>
+      text.includes(
+        normalize(skill)
+      )
+  );
+}
+
+async function getJson(url) {
+
+  const response =
+    await fetch(url, {
+      headers: {
+        "User-Agent":
+          "JobSeekerAgent/1.0"
+      }
+    });
 
   if (!response.ok) {
-    throw new Error(`Source returned ${response.status}`);
+
+    throw new Error(
+      `API returned ${response.status}`
+    );
+
   }
 
   return response.json();
 }
 
-async function jobs(query) {
-  const out = [];
+function extractSalary(text) {
+
+  const match =
+    String(text || "").match(
+      /(?:\$|USD\s?)\s?\d{2,3}(?:,\d{3})?(?:\s?(?:-|–|to)\s?(?:\$|USD\s?)?\d{2,3}(?:,\d{3})?)?/i
+    );
+
+  return match
+    ? match[0]
+    : "Not listed";
+}
+
+async function searchJobs(query) {
+
+  const results = [];
+
   const warnings = [];
 
-  const results = await Promise.allSettled([
-    feed(
-      `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(query)}`
-    ),
+  const remotiveURL =
+    `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(
+      query
+    )}`;
 
-    feed(
-      'https://www.arbeitnow.com/api/job-board-api'
-    )
-  ]);
+  try {
 
-  // Remotive
-  if (results[0].status === 'fulfilled') {
-    out.push(
-      ...(results[0].value.jobs || []).map(x => ({
-        company: x.company_name,
-        title: x.title,
+    const data =
+      await getJson(remotiveURL);
+
+    const jobs =
+      Array.isArray(data.jobs)
+        ? data.jobs
+        : [];
+
+    for (const job of jobs) {
+
+      results.push({
+
+        company:
+          job.company_name ||
+          "Unknown company",
+
+        title:
+          job.title ||
+          "Untitled",
+
         location:
-          x.candidate_required_location || 'Remote',
+          job.candidate_required_location ||
+          "Remote",
+
         salary:
-          x.salary || salary(x.description),
-        url: x.url,
-        source: 'Remotive',
-        description: x.description || '',
-        posted: x.publication_date
-      }))
+          job.salary ||
+          extractSalary(
+            job.description
+          ),
+
+        url:
+          job.url || "#",
+
+        source:
+          "Remotive",
+
+        description:
+          job.description || "",
+
+        posted:
+          job.publication_date || ""
+
+      });
+
+    }
+
+  } catch (error) {
+
+    console.error(
+      "Remotive error:",
+      error
     );
-  } else {
-    warnings.push('Remotive unavailable');
+
+    warnings.push(
+      "Remotive unavailable"
+    );
+
   }
 
-  // Arbeitnow
-  const terms = words(query);
+  try {
 
-  if (results[1].status === 'fulfilled') {
-    out.push(
-      ...(results[1].value.data || [])
-        .filter(
-          x =>
-            !terms.length ||
-            terms.some(t =>
-              norm(
-                `${x.title} ${x.description}`
-              ).includes(t)
-            )
-        )
-        .slice(0, 100)
-        .map(x => ({
-          company: x.company_name,
-          title: x.title,
-          location:
-            x.location ||
-            (x.remote ? 'Remote' : 'Not listed'),
-          salary: salary(x.description),
-          url: x.url,
-          source: 'Arbeitnow',
-          description: x.description || '',
-          posted: x.created_at
-        }))
+    const data =
+      await getJson(
+        "https://www.arbeitnow.com/api/job-board-api"
+      );
+
+    const jobs =
+      Array.isArray(data.data)
+        ? data.data
+        : [];
+
+    const queryWords =
+      getWords(query);
+
+    for (const job of jobs) {
+
+      const text =
+        normalize(
+          `${job.title || ""} ${
+            job.description || ""
+          }`
+        );
+
+      const matches =
+        queryWords.length === 0 ||
+        queryWords.some(
+          word =>
+            text.includes(word)
+        );
+
+      if (!matches) {
+        continue;
+      }
+
+      results.push({
+
+        company:
+          job.company_name ||
+          "Unknown company",
+
+        title:
+          job.title ||
+          "Untitled",
+
+        location:
+          job.location ||
+          (
+            job.remote
+              ? "Remote"
+              : "Not listed"
+          ),
+
+        salary:
+          extractSalary(
+            job.description
+          ),
+
+        url:
+          job.url || "#",
+
+        source:
+          "Arbeitnow",
+
+        description:
+          job.description || "",
+
+        posted:
+          job.created_at || ""
+
+      });
+
+    }
+
+  } catch (error) {
+
+    console.error(
+      "Arbeitnow error:",
+      error
     );
-  } else {
-    warnings.push('Arbeitnow unavailable');
+
+    warnings.push(
+      "Arbeitnow unavailable"
+    );
+
   }
 
   return {
-    out,
+    results,
     warnings
   };
 }
 
-function rank(job, p) {
-  const text = norm(
-    `${job.title} ${job.description} ${job.location}`
-  );
+function rankJob(job, profile) {
 
-  const matched = p.skills.filter(x =>
-    text.includes(norm(x))
-  );
+  const text =
+    normalize(
+      `${job.title} ${
+        job.description
+      } ${job.location}`
+    );
 
-  const titles = words(p.titles).filter(x =>
-    norm(job.title).includes(x)
-  );
+  const matched =
+    profile.skills.filter(
+      skill =>
+        text.includes(
+          normalize(skill)
+        )
+    );
 
-  const score =
-    Math.min(55, matched.length * 14) +
-    Math.min(25, titles.length * 10) +
+  const targetWords =
+    getWords(
+      profile.titles
+    );
+
+  const titleMatches =
+    targetWords.filter(
+      word =>
+        normalize(job.title)
+          .includes(word)
+    );
+
+  let score = 0;
+
+  score +=
     Math.min(
-      20,
-      p.terms.filter(x => text.includes(x)).length
-    ) +
-    (p.remote && /remote/i.test(job.location) ? 8 : 0) +
-    (p.location &&
-    norm(job.location).includes(norm(p.location))
-      ? 8
-      : 0);
+      55,
+      matched.length * 14
+    );
+
+  score +=
+    Math.min(
+      25,
+      titleMatches.length * 10
+    );
+
+  if (
+    profile.remote &&
+    /remote/i.test(
+      job.location
+    )
+  ) {
+
+    score += 8;
+
+  }
+
+  if (
+    profile.location &&
+    normalize(
+      job.location
+    ).includes(
+      normalize(
+        profile.location
+      )
+    )
+  ) {
+
+    score += 8;
+
+  }
 
   return {
+
     ...job,
 
-    fit: Math.min(100, score),
+    fit:
+      Math.min(
+        100,
+        score
+      ),
 
     matched,
 
-    reason: matched.length
-      ? `Matches ${matched.join(', ')}${
-          titles.length
-            ? '; target title aligns.'
-            : '.'
-        }`
-      : 'Keyword-level match; review the listed requirements.'
+    reason:
+      matched.length
+        ? `Matches ${matched.join(", ")}.`
+        : "Keyword-level match; review the job requirements."
+
   };
+
 }
 
-async function readBody(req) {
-  if (
-    req.body &&
-    typeof req.body === 'object'
-  ) {
-    return req.body;
-  }
-
-  if (typeof req.body === 'string') {
-    return JSON.parse(req.body || '{}');
-  }
-
-  return await new Promise((resolve, reject) => {
-    let body = '';
-
-    req.on('data', chunk => {
-      body += chunk;
-
-      if (body.length > 1e6) {
-        reject(
-          new Error('Request too large')
-        );
-      }
-    });
-
-    req.on('end', () => {
-      try {
-        resolve(
-          JSON.parse(body || '{}')
-        );
-      } catch {
-        reject(
-          new Error('Invalid request')
-        );
-      }
-    });
-
-    req.on('error', reject);
-  });
-}
-
-module.exports = async function handler(
-  req,
-  res
-) {
-  if (req.method !== 'POST') {
+module.exports =
+  async function handler(
+    req,
     res
-      .status(405)
-      .json({
-        error:
-          'Method not allowed. Use POST.'
-      });
+  ) {
 
-    return;
-  }
+    /*
+     * Only POST is allowed.
+     */
 
-  try {
-    const x = await readBody(req);
+    if (req.method !== "POST") {
 
-    if (!String(x.resume || '').trim()) {
-      res
-        .status(400)
+      return res
+        .status(405)
         .json({
           error:
-            'Paste a resume first.'
+            "Method not allowed. Use POST."
         });
 
-      return;
     }
 
-    const p = profile(
-      x.resume,
-      x.preferences || {}
-    );
+    try {
 
-    const q =
-      p.titles ||
-      p.skills.slice(0, 3).join(' ') ||
-      'software engineer';
+      const body =
+        req.body || {};
 
-    const {
-      out,
-      warnings
-    } = await jobs(q);
+      const resume =
+        String(
+          body.resume || ""
+        ).trim();
 
-    const seen = new Set();
+      const preferences =
+        body.preferences || {};
 
-    const list = out
-      .filter(j => {
-        const key = norm(
-          `${j.company}|${j.title}|${j.location}`
+      if (!resume) {
+
+        return res
+          .status(400)
+          .json({
+            error:
+              "Please paste your resume first."
+          });
+
+      }
+
+      const detectedSkills =
+        extractSkills(
+          resume
         );
 
-        if (seen.has(key)) {
-          return false;
-        }
+      const profile = {
 
-        seen.add(key);
+        skills:
+          detectedSkills,
 
-        return (
-          !p.remote ||
-          /remote/i.test(j.location)
+        terms:
+          getWords(resume),
+
+        titles:
+          String(
+            preferences.titles ||
+            ""
+          ),
+
+        location:
+          String(
+            preferences.location ||
+            ""
+          ),
+
+        remote:
+          Boolean(
+            preferences.remote
+          )
+
+      };
+
+      const query =
+        profile.titles ||
+        profile.skills
+          .slice(0, 3)
+          .join(" ") ||
+        "software engineer";
+
+      const {
+        results,
+        warnings
+      } =
+        await searchJobs(
+          query
         );
-      })
-      .map(j => rank(j, p))
-      .sort(
-        (a, b) => b.fit - a.fit
-      )
-      .slice(0, 100);
 
-    res.status(200).json({
-      profile: p,
-      query: q,
-      total: list.length,
-      jobs: list,
-      warnings
-    });
+      const seen =
+        new Set();
 
-  } catch (e) {
-    console.error(e);
+      const ranked =
+        results
 
-    res
-      .status(502)
-      .json({
-        error:
-          e.message ||
-          'Job search failed.'
-      });
-  }
-};
+          .filter(job => {
+
+            const key =
+              normalize(
+                `${job.company}|${job.title}|${job.location}`
+              );
+
+            if (
+              seen.has(key)
+            ) {
+
+              return false;
+
+            }
+
+            seen.add(key);
+
+            if (
+              profile.remote &&
+              !/remote/i.test(
+                job.location
+              )
+            ) {
+
+              return false;
+
+            }
+
+            return true;
+
+          })
+
+          .map(job =>
+            rankJob(
+              job,
+              profile
+            )
+          )
+
+          .sort(
+            (a, b) =>
+              b.fit - a.fit
+          )
+
+          .slice(0, 100);
+
+      return res
+        .status(200)
+        .json({
+
+          profile,
+
+          query,
+
+          total:
+            ranked.length,
+
+          jobs:
+            ranked,
+
+          warnings
+
+        });
+
+    } catch (error) {
+
+      console.error(
+        "Search function error:",
+        error
+      );
+
+      return res
+        .status(500)
+        .json({
+
+          error:
+            error.message ||
+            "Internal server error."
+
+        });
+
+    }
+
+  };
