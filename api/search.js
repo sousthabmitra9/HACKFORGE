@@ -24,11 +24,17 @@ const skills = [
   "git"
 ];
 
+
+// ------------------------------------------------------------
+// TEXT HELPERS
+// ------------------------------------------------------------
+
 function normalize(text) {
   return String(text || "")
     .toLowerCase()
     .replace(/[^a-z0-9+#. ]/g, " ");
 }
+
 
 function getWords(text) {
   return [
@@ -41,6 +47,11 @@ function getWords(text) {
     )
   ];
 }
+
+
+// ------------------------------------------------------------
+// RESUME SKILL EXTRACTION
+// ------------------------------------------------------------
 
 function extractSkills(resume) {
 
@@ -55,26 +66,81 @@ function extractSkills(resume) {
   );
 }
 
+
+// ------------------------------------------------------------
+// SAFE JSON REQUEST
+// ------------------------------------------------------------
+
 async function getJson(url) {
 
-  const response =
-    await fetch(url, {
-      headers: {
-        "User-Agent":
-          "JobSeekerAgent/1.0"
-      }
-    });
+  try {
 
-  if (!response.ok) {
+    const response =
+      await fetch(url, {
 
-    throw new Error(
-      `API returned ${response.status}`
-    );
+        method: "GET",
+
+        headers: {
+          "User-Agent":
+            "JobSeekerAgent/1.0",
+          "Accept":
+            "application/json"
+        },
+
+        // Prevent external APIs from hanging
+        signal:
+          AbortSignal.timeout(10000)
+
+      });
+
+
+    if (!response.ok) {
+
+      throw new Error(
+        `API returned HTTP ${response.status}`
+      );
+
+    }
+
+
+    return await response.json();
+
+  } catch (error) {
+
+    if (
+      error &&
+      error.name === "TimeoutError"
+    ) {
+
+      throw new Error(
+        "External API request timed out"
+      );
+
+    }
+
+
+    if (
+      error &&
+      error.name === "AbortError"
+    ) {
+
+      throw new Error(
+        "External API request was aborted"
+      );
+
+    }
+
+
+    throw error;
 
   }
 
-  return response.json();
 }
+
+
+// ------------------------------------------------------------
+// SALARY EXTRACTION
+// ------------------------------------------------------------
 
 function extractSalary(text) {
 
@@ -83,69 +149,75 @@ function extractSalary(text) {
       /(?:\$|USD\s?)\s?\d{2,3}(?:,\d{3})?(?:\s?(?:-|–|to)\s?(?:\$|USD\s?)?\d{2,3}(?:,\d{3})?)?/i
     );
 
+
   return match
     ? match[0]
     : "Not listed";
+
 }
 
-async function searchJobs(query) {
 
-  const results = [];
+// ------------------------------------------------------------
+// SEARCH REMOTIVE
+// ------------------------------------------------------------
 
-  const warnings = [];
+async function searchRemotive(query) {
 
-  const remotiveURL =
+  const url =
     `https://remotive.com/api/remote-jobs?search=${encodeURIComponent(
       query
     )}`;
 
+
   try {
 
     const data =
-      await getJson(remotiveURL);
+      await getJson(url);
+
 
     const jobs =
       Array.isArray(data.jobs)
         ? data.jobs
         : [];
 
-    for (const job of jobs) {
 
-      results.push({
+    return jobs.map(job => ({
 
-        company:
-          job.company_name ||
-          "Unknown company",
+      company:
+        job.company_name ||
+        "Unknown company",
 
-        title:
-          job.title ||
-          "Untitled",
+      title:
+        job.title ||
+        "Untitled",
 
-        location:
-          job.candidate_required_location ||
-          "Remote",
+      location:
+        job.candidate_required_location ||
+        "Remote",
 
-        salary:
-          job.salary ||
-          extractSalary(
-            job.description
-          ),
+      salary:
+        job.salary ||
+        extractSalary(
+          job.description
+        ),
 
-        url:
-          job.url || "#",
+      url:
+        job.url ||
+        "#",
 
-        source:
-          "Remotive",
+      source:
+        "Remotive",
 
-        description:
-          job.description || "",
+      description:
+        job.description ||
+        "",
 
-        posted:
-          job.publication_date || ""
+      posted:
+        job.publication_date ||
+        ""
 
-      });
+    }));
 
-    }
 
   } catch (error) {
 
@@ -154,26 +226,49 @@ async function searchJobs(query) {
       error
     );
 
-    warnings.push(
-      "Remotive unavailable"
-    );
+
+    return {
+
+      jobs: [],
+
+      warning:
+        "Remotive unavailable"
+
+    };
 
   }
+
+}
+
+
+// ------------------------------------------------------------
+// SEARCH ARBEITNOW
+// ------------------------------------------------------------
+
+async function searchArbeitnow(query) {
+
+  const url =
+    "https://www.arbeitnow.com/api/job-board-api";
+
 
   try {
 
     const data =
-      await getJson(
-        "https://www.arbeitnow.com/api/job-board-api"
-      );
+      await getJson(url);
+
 
     const jobs =
       Array.isArray(data.data)
         ? data.data
         : [];
 
+
     const queryWords =
       getWords(query);
+
+
+    const results = [];
+
 
     for (const job of jobs) {
 
@@ -184,6 +279,7 @@ async function searchJobs(query) {
           }`
         );
 
+
       const matches =
         queryWords.length === 0 ||
         queryWords.some(
@@ -191,9 +287,13 @@ async function searchJobs(query) {
             text.includes(word)
         );
 
+
       if (!matches) {
+
         continue;
+
       }
+
 
       results.push({
 
@@ -219,20 +319,33 @@ async function searchJobs(query) {
           ),
 
         url:
-          job.url || "#",
+          job.url ||
+          "#",
 
         source:
           "Arbeitnow",
 
         description:
-          job.description || "",
+          job.description ||
+          "",
 
         posted:
-          job.created_at || ""
+          job.created_at ||
+          ""
 
       });
 
     }
+
+
+    return {
+
+      jobs: results,
+
+      warning: null
+
+    };
+
 
   } catch (error) {
 
@@ -241,17 +354,122 @@ async function searchJobs(query) {
       error
     );
 
+
+    return {
+
+      jobs: [],
+
+      warning:
+        "Arbeitnow unavailable"
+
+    };
+
+  }
+
+}
+
+
+// ------------------------------------------------------------
+// SEARCH BOTH JOB SOURCES
+// ------------------------------------------------------------
+
+async function searchJobs(query) {
+
+  /*
+   * Run both APIs at the same time.
+   *
+   * This is faster than:
+   *
+   * Remotive → wait → Arbeitnow
+   *
+   * Instead:
+   *
+   * Remotive ──┐
+   *            ├──> results
+   * Arbeitnow ─┘
+   */
+
+  const [
+    remotiveResult,
+    arbeitnowResult
+  ] =
+    await Promise.all([
+
+      searchRemotive(query),
+
+      searchArbeitnow(query)
+
+    ]);
+
+
+  const remotiveJobs =
+    Array.isArray(remotiveResult)
+      ? remotiveResult
+      : (
+          remotiveResult &&
+          Array.isArray(
+            remotiveResult.jobs
+          )
+            ? remotiveResult.jobs
+            : []
+        );
+
+
+  const arbeitnowJobs =
+    (
+      arbeitnowResult &&
+      Array.isArray(
+        arbeitnowResult.jobs
+      )
+    )
+      ? arbeitnowResult.jobs
+      : [];
+
+
+  const warnings = [];
+
+
+  if (
+    remotiveResult &&
+    remotiveResult.warning
+  ) {
+
     warnings.push(
-      "Arbeitnow unavailable"
+      remotiveResult.warning
     );
 
   }
 
+
+  if (
+    arbeitnowResult &&
+    arbeitnowResult.warning
+  ) {
+
+    warnings.push(
+      arbeitnowResult.warning
+    );
+
+  }
+
+
   return {
-    results,
+
+    results: [
+      ...remotiveJobs,
+      ...arbeitnowJobs
+    ],
+
     warnings
+
   };
+
 }
+
+
+// ------------------------------------------------------------
+// JOB RANKING
+// ------------------------------------------------------------
 
 function rankJob(job, profile) {
 
@@ -262,6 +480,7 @@ function rankJob(job, profile) {
       } ${job.location}`
     );
 
+
   const matched =
     profile.skills.filter(
       skill =>
@@ -270,10 +489,12 @@ function rankJob(job, profile) {
         )
     );
 
+
   const targetWords =
     getWords(
       profile.titles
     );
+
 
   const titleMatches =
     targetWords.filter(
@@ -282,20 +503,27 @@ function rankJob(job, profile) {
           .includes(word)
     );
 
+
   let score = 0;
 
+
+  // Skill match
   score +=
     Math.min(
       55,
       matched.length * 14
     );
 
+
+  // Target job title match
   score +=
     Math.min(
       25,
       titleMatches.length * 10
     );
 
+
+  // Remote preference
   if (
     profile.remote &&
     /remote/i.test(
@@ -307,6 +535,8 @@ function rankJob(job, profile) {
 
   }
 
+
+  // Location preference
   if (
     profile.location &&
     normalize(
@@ -321,6 +551,7 @@ function rankJob(job, profile) {
     score += 8;
 
   }
+
 
   return {
 
@@ -343,55 +574,84 @@ function rankJob(job, profile) {
 
 }
 
+
+// ------------------------------------------------------------
+// VERCEL SERVERLESS FUNCTION
+// ------------------------------------------------------------
+
 module.exports =
   async function handler(
     req,
     res
   ) {
 
-    /*
-     * Only POST is allowed.
-     */
+    // --------------------------------------------------------
+    // METHOD CHECK
+    // --------------------------------------------------------
 
-    if (req.method !== "POST") {
+    if (
+      req.method !== "POST"
+    ) {
 
       return res
         .status(405)
         .json({
+
           error:
             "Method not allowed. Use POST."
+
         });
 
     }
 
+
     try {
+
+      // ------------------------------------------------------
+      // REQUEST BODY
+      // ------------------------------------------------------
 
       const body =
         req.body || {};
+
 
       const resume =
         String(
           body.resume || ""
         ).trim();
 
+
       const preferences =
         body.preferences || {};
+
+
+      // ------------------------------------------------------
+      // VALIDATE RESUME
+      // ------------------------------------------------------
 
       if (!resume) {
 
         return res
           .status(400)
           .json({
+
             error:
               "Please paste your resume first."
+
           });
 
       }
+
+
+      // ------------------------------------------------------
+      // EXTRACT PROFILE
+      // ------------------------------------------------------
 
       const detectedSkills =
         extractSkills(
           resume
         );
+
 
       const profile = {
 
@@ -420,12 +680,22 @@ module.exports =
 
       };
 
+
+      // ------------------------------------------------------
+      // CREATE SEARCH QUERY
+      // ------------------------------------------------------
+
       const query =
         profile.titles ||
         profile.skills
           .slice(0, 3)
           .join(" ") ||
         "software engineer";
+
+
+      // ------------------------------------------------------
+      // SEARCH JOB SOURCES
+      // ------------------------------------------------------
 
       const {
         results,
@@ -435,8 +705,14 @@ module.exports =
           query
         );
 
+
+      // ------------------------------------------------------
+      // REMOVE DUPLICATES
+      // ------------------------------------------------------
+
       const seen =
         new Set();
+
 
       const ranked =
         results
@@ -448,6 +724,7 @@ module.exports =
                 `${job.company}|${job.title}|${job.location}`
               );
 
+
             if (
               seen.has(key)
             ) {
@@ -456,8 +733,11 @@ module.exports =
 
             }
 
+
             seen.add(key);
 
+
+            // Remote-only filtering
             if (
               profile.remote &&
               !/remote/i.test(
@@ -469,9 +749,15 @@ module.exports =
 
             }
 
+
             return true;
 
           })
+
+
+          // --------------------------------------------------
+          // RANK
+          // --------------------------------------------------
 
           .map(job =>
             rankJob(
@@ -480,12 +766,30 @@ module.exports =
             )
           )
 
+
+          // --------------------------------------------------
+          // SORT
+          // --------------------------------------------------
+
           .sort(
             (a, b) =>
               b.fit - a.fit
           )
 
-          .slice(0, 100);
+
+          // --------------------------------------------------
+          // LIMIT RESULTS
+          // --------------------------------------------------
+
+          .slice(
+            0,
+            100
+          );
+
+
+      // ------------------------------------------------------
+      // SUCCESS RESPONSE
+      // ------------------------------------------------------
 
       return res
         .status(200)
@@ -505,20 +809,28 @@ module.exports =
 
         });
 
+
     } catch (error) {
+
+      // ------------------------------------------------------
+      // FINAL ERROR HANDLER
+      // ------------------------------------------------------
 
       console.error(
         "Search function error:",
         error
       );
 
+
       return res
         .status(500)
         .json({
 
           error:
-            error.message ||
-            "Internal server error."
+            error &&
+            error.message
+              ? error.message
+              : "Internal server error."
 
         });
 
